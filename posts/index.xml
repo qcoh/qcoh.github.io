@@ -1,0 +1,114 @@
+<?xml version="1.0" encoding="utf-8" standalone="yes" ?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom">
+  <channel>
+    <title>Posts on Jeremias Yehdegho</title>
+    <link>https://qcoh.github.io/posts/</link>
+    <description>Recent content in Posts on Jeremias Yehdegho</description>
+    <generator>Hugo -- gohugo.io</generator>
+    <language>en-us</language>
+    <lastBuildDate>Fri, 28 Dec 2018 11:24:59 +0100</lastBuildDate>
+    
+        <atom:link href="https://qcoh.github.io/posts/index.xml" rel="self" type="application/rss+xml" />
+    
+    
+    <item>
+      <title>Finding Leaks With Gdb</title>
+      <link>https://qcoh.github.io/2018/12/finding-leaks-with-gdb/</link>
+      <pubDate>Fri, 28 Dec 2018 11:24:59 +0100</pubDate>
+      
+      <guid>https://qcoh.github.io/2018/12/finding-leaks-with-gdb/</guid>
+      <description>
+
+&lt;p&gt;Suppose you have in your software objects with specific lifetime
+requirements, e.g. they must be created during initialization or
+they must not persist beyond one cycle. Moreover, a violation
+of these requirements may lead to a crash and you know &lt;em&gt;which&lt;/em&gt;
+object caused the problem but you do not know &lt;em&gt;where&lt;/em&gt; it came from.&lt;/p&gt;
+
+&lt;p&gt;Debugging might be very difficult if your software is sufficiently
+large and I&amp;rsquo;d like to share what I did in this situation.
+I had&lt;/p&gt;
+&lt;div class=&#34;highlight&#34;&gt;&lt;pre style=&#34;;-moz-tab-size:4;-o-tab-size:4;tab-size:4&#34;&gt;&lt;code class=&#34;language-CPP&#34; data-lang=&#34;CPP&#34;&gt;Object&lt;span style=&#34;color:#666&#34;&gt;*&lt;/span&gt; &lt;span style=&#34;color:#00f&#34;&gt;factory&lt;/span&gt;() { ... }
+&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;
+&lt;p&gt;which was called in several dozen places throughout the code. I was
+tempted to store &lt;code&gt;__FILE__&lt;/code&gt; and &lt;code&gt;__LINE__&lt;/code&gt; with the object but
+modifying every call to &lt;code&gt;factory()&lt;/code&gt; was too tedious.&lt;/p&gt;
+
+&lt;p&gt;Fortunately, it is possible to find the file name and line number
+of each call to &lt;code&gt;factory()&lt;/code&gt; from inside the function body.&lt;/p&gt;
+
+&lt;h2 id=&#34;enter-builtin-return-address&#34;&gt;Enter &lt;code&gt;__builtin_return_address&lt;/code&gt;&lt;/h2&gt;
+
+&lt;p&gt;As the name implies, this is a builtin function in gcc (and clang), which takes
+an unsigned int argument (the level, but we will ignore this) and returns a
+void pointer. Per gcc&amp;rsquo;s &lt;a href=&#34;https://gcc.gnu.org/onlinedocs/gcc/Return-Address.html&#34;&gt;documentation&lt;/a&gt;:&lt;/p&gt;
+
+&lt;blockquote&gt;
+&lt;p&gt;This function returns the return address of the current function [&amp;hellip;]&lt;/p&gt;
+&lt;/blockquote&gt;
+
+&lt;p&gt;In order to better understand what it does, let&amp;rsquo;s look at the assembly output of
+this very simple program:&lt;/p&gt;
+&lt;div class=&#34;highlight&#34;&gt;&lt;pre style=&#34;;-moz-tab-size:4;-o-tab-size:4;tab-size:4&#34;&gt;&lt;code class=&#34;language-CPP&#34; data-lang=&#34;CPP&#34;&gt;&lt;span style=&#34;color:#b00040&#34;&gt;void&lt;/span&gt;&lt;span style=&#34;color:#666&#34;&gt;*&lt;/span&gt; &lt;span style=&#34;color:#00f&#34;&gt;foo&lt;/span&gt;() {
+	&lt;span style=&#34;color:#008000;font-weight:bold&#34;&gt;return&lt;/span&gt; __builtin_return_address(&lt;span style=&#34;color:#666&#34;&gt;0&lt;/span&gt;);
+}
+
+&lt;span style=&#34;color:#b00040&#34;&gt;int&lt;/span&gt; &lt;span style=&#34;color:#00f&#34;&gt;main&lt;/span&gt;() {
+	foo();
+}
+&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;
+&lt;p&gt;If we compile&lt;sup class=&#34;footnote-ref&#34; id=&#34;fnref:1&#34;&gt;&lt;a href=&#34;#fn:1&#34;&gt;1&lt;/a&gt;&lt;/sup&gt; it and run it with gdb, we get&lt;/p&gt;
+&lt;div class=&#34;highlight&#34;&gt;&lt;pre style=&#34;;-moz-tab-size:4;-o-tab-size:4;tab-size:4&#34;&gt;0x5555555545fa &amp;lt;foo()&amp;gt;                  push   rbp
+0x5555555545fb &amp;lt;foo()+1&amp;gt;                mov    rbp,rsp 
+0x5555555545fe &amp;lt;foo()+4&amp;gt;                mov    rax,QWORD PTR [rbp+0x8]
+0x555555554602 &amp;lt;foo()+8&amp;gt;                pop    rbp
+0x555555554603 &amp;lt;foo()+9&amp;gt;                ret
+0x555555554604 &amp;lt;main()&amp;gt;                 push   rbp
+0x555555554605 &amp;lt;main()+1&amp;gt;               mov    rbp,rsp
+0x555555554608 &amp;lt;main()+4&amp;gt;               call   0x5555555545fa &amp;lt;foo()&amp;gt;
+0x55555555460d &amp;lt;main()+9&amp;gt;               mov    eax,0x0
+0x555555554612 &amp;lt;main()+14&amp;gt;              pop    rbp
+0x555555554613 &amp;lt;main()+15&amp;gt;              ret &lt;/pre&gt;&lt;/div&gt;
+&lt;p&gt;The interesting bit happens at &lt;code&gt;foo()+4&lt;/code&gt;, where the value of &lt;code&gt;[rbp+8]&lt;/code&gt;
+is moved into &lt;code&gt;rax&lt;/code&gt;&lt;sup class=&#34;footnote-ref&#34; id=&#34;fnref:2&#34;&gt;&lt;a href=&#34;#fn:2&#34;&gt;2&lt;/a&gt;&lt;/sup&gt;. In gdb we can inspect this value and see&lt;/p&gt;
+&lt;div class=&#34;highlight&#34;&gt;&lt;pre style=&#34;;-moz-tab-size:4;-o-tab-size:4;tab-size:4&#34;&gt;(gdb) p/x *(unsigned long*)($rbp + 8)
+$1 = 0x55555555460d&lt;/pre&gt;&lt;/div&gt;
+&lt;p&gt;which is &lt;code&gt;main()+9&lt;/code&gt;, the code immediately after the call to &lt;code&gt;foo()&lt;/code&gt;. What we
+just did manually, gdb can do automatically:&lt;/p&gt;
+&lt;div class=&#34;highlight&#34;&gt;&lt;pre style=&#34;;-moz-tab-size:4;-o-tab-size:4;tab-size:4&#34;&gt;(gdb) info line *0x55555555460d
+Line 7 of &amp;#34;research.cpp&amp;#34; starts at address 0x55555555460d &amp;lt;main()+9&amp;gt; and ends at 0x555555554614.&lt;/pre&gt;&lt;/div&gt;
+&lt;p&gt;Note that gdb tells us file name and line number.&lt;/p&gt;
+
+&lt;h2 id=&#34;finding-leaks&#34;&gt;Finding leaks&lt;/h2&gt;
+
+&lt;p&gt;Returning to our example before, I modified &lt;code&gt;Object&lt;/code&gt; and the factory&lt;/p&gt;
+&lt;div class=&#34;highlight&#34;&gt;&lt;pre style=&#34;;-moz-tab-size:4;-o-tab-size:4;tab-size:4&#34;&gt;&lt;code class=&#34;language-CPP&#34; data-lang=&#34;CPP&#34;&gt;Object&lt;span style=&#34;color:#666&#34;&gt;*&lt;/span&gt; &lt;span style=&#34;color:#00f&#34;&gt;factory&lt;/span&gt;() {
+	Object&lt;span style=&#34;color:#666&#34;&gt;*&lt;/span&gt; ret &lt;span style=&#34;color:#666&#34;&gt;=&lt;/span&gt; ...
+	ret&lt;span style=&#34;color:#666&#34;&gt;-&amp;gt;&lt;/span&gt;m_origin &lt;span style=&#34;color:#666&#34;&gt;=&lt;/span&gt; __builtin_return_address(&lt;span style=&#34;color:#666&#34;&gt;0&lt;/span&gt;);
+	&lt;span style=&#34;color:#008000;font-weight:bold&#34;&gt;return&lt;/span&gt; ret;
+}
+&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;
+&lt;p&gt;When the bug occured and I knew which object caused the issue, I was now
+able to figure out where it came from:&lt;/p&gt;
+&lt;div class=&#34;highlight&#34;&gt;&lt;pre style=&#34;;-moz-tab-size:4;-o-tab-size:4;tab-size:4&#34;&gt;(gdb) info line *offendingObject-&amp;gt;m_origin&lt;/pre&gt;&lt;/div&gt;
+&lt;p&gt;This technique often allowed me to find the needle in the haystack, for
+example where an exception was thrown, with little time investment.&lt;/p&gt;
+
+&lt;p&gt;Thanks for reading! If you have a question or a comment, feel free
+to &lt;a href=&#34;mailto:quasicoherent@protonmail.com&#34;&gt;contact me&lt;/a&gt;.&lt;/p&gt;
+&lt;div class=&#34;footnotes&#34;&gt;
+
+&lt;hr /&gt;
+
+&lt;ol&gt;
+&lt;li id=&#34;fn:1&#34;&gt;&lt;code&gt;g++ -g research.cpp&lt;/code&gt;
+ &lt;a class=&#34;footnote-return&#34; href=&#34;#fnref:1&#34;&gt;&lt;sup&gt;[return]&lt;/sup&gt;&lt;/a&gt;&lt;/li&gt;
+&lt;li id=&#34;fn:2&#34;&gt;Note that if we compile with &lt;code&gt;-fomit-frame-pointer&lt;/code&gt; the return value of &lt;code&gt;__builtin_return_address&lt;/code&gt; still points to the correct location in the code but without doing the indirection via &lt;code&gt;rbp&lt;/code&gt; and just returning &lt;code&gt;[rsp]&lt;/code&gt;.
+ &lt;a class=&#34;footnote-return&#34; href=&#34;#fnref:2&#34;&gt;&lt;sup&gt;[return]&lt;/sup&gt;&lt;/a&gt;&lt;/li&gt;
+&lt;/ol&gt;
+&lt;/div&gt;
+</description>
+    </item>
+    
+  </channel>
+</rss>
