@@ -2,10 +2,10 @@
 <feed xmlns="http://www.w3.org/2005/Atom">
  
  <title>The blog of Jeremias Yehdegho</title>
- <link href="http://example.com/atom.xml" rel="self"/>
- <link href="http://example.com"/>
- <updated>2021-03-28T20:49:12+02:00</updated>
- <id>http://example.com</id>
+ <link href="https://qcoh.github.io/atom.xml" rel="self"/>
+ <link href="https://qcoh.github.io"/>
+ <updated>2021-03-28T21:14:57+02:00</updated>
+ <id>https://qcoh.github.io</id>
  <author>
    <name>Jeremias Yehdegho</name>
    <email>j.yehdegho@gmail.com</email>
@@ -14,9 +14,9 @@
  
  <entry>
    <title>Writing a checker for clang</title>
-   <link href="http://example.com/blog/2019/05/12/writing-a-checker-for-clang.html"/>
+   <link href="https://qcoh.github.io/blog/2019/05/12/writing-a-checker-for-clang.html"/>
    <updated>2019-05-12T00:00:00+02:00</updated>
-   <id>http://example.com/blog/2019/05/12/writing-a-checker-for-clang</id>
+   <id>https://qcoh.github.io/blog/2019/05/12/writing-a-checker-for-clang</id>
    <content type="html">&lt;p&gt;When writing safety-critical software, people often use languages like Ada, C or C++. The former has an excellent reputation concerning safety, the latter two absolutely do not. In order to make the use of C and C++ safer, people write in restricted subsets of these languages, avoiding dangerous language constructs and features.&lt;/p&gt;
 
 &lt;p&gt;One of such language subset is the &lt;a href=&quot;https://www.autosar.org/fileadmin/user_upload/standards/adaptive/17-03/AUTOSAR_RS_CPP14Guidelines.pdf&quot;&gt;Autosar coding guidelines for C++14&lt;/a&gt;, which are based on earlier coding standards, such as MISRA and the JSF coding standard.&lt;/p&gt;
@@ -212,9 +212,9 @@ std::string const A::seperator = &quot;===&quot;;
  
  <entry>
    <title>Finding leaks with gdb</title>
-   <link href="http://example.com/blog/2019/05/12/finding-leaks-with-gdb.html"/>
+   <link href="https://qcoh.github.io/blog/2019/05/12/finding-leaks-with-gdb.html"/>
    <updated>2019-05-12T00:00:00+02:00</updated>
-   <id>http://example.com/blog/2019/05/12/finding-leaks-with-gdb</id>
+   <id>https://qcoh.github.io/blog/2019/05/12/finding-leaks-with-gdb</id>
    <content type="html">&lt;p&gt;Suppose you have in your software objects with specific lifetime requirements, e.g. they must be created during initialization or they must not persist beyond one cycle. Moreover, a violation of these requirements may lead to a crash and you know &lt;em&gt;which&lt;/em&gt; object caused the problem but you do not know &lt;em&gt;where&lt;/em&gt; it came from.&lt;/p&gt;
 
 &lt;div class=&quot;language-cpp highlighter-rouge&quot;&gt;&lt;div class=&quot;highlight&quot;&gt;&lt;pre class=&quot;highlight&quot;&gt;&lt;code&gt;&lt;span class=&quot;n&quot;&gt;Object&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;*&lt;/span&gt; &lt;span class=&quot;nf&quot;&gt;factory&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;()&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;{&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;...&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;}&lt;/span&gt;
