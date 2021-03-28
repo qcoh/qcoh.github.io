@@ -4,7 +4,7 @@
  <title>The blog of Jeremias Yehdegho</title>
  <link href="https://qcoh.github.io/atom.xml" rel="self"/>
  <link href="https://qcoh.github.io"/>
- <updated>2021-03-28T21:14:57+02:00</updated>
+ <updated>2021-03-28T21:18:57+02:00</updated>
  <id>https://qcoh.github.io</id>
  <author>
    <name>Jeremias Yehdegho</name>
@@ -212,9 +212,9 @@ std::string const A::seperator = &quot;===&quot;;
  
  <entry>
    <title>Finding leaks with gdb</title>
-   <link href="https://qcoh.github.io/blog/2019/05/12/finding-leaks-with-gdb.html"/>
-   <updated>2019-05-12T00:00:00+02:00</updated>
-   <id>https://qcoh.github.io/blog/2019/05/12/finding-leaks-with-gdb</id>
+   <link href="https://qcoh.github.io/blog/2019/01/07/finding-leaks-with-gdb.html"/>
+   <updated>2019-01-07T00:00:00+01:00</updated>
+   <id>https://qcoh.github.io/blog/2019/01/07/finding-leaks-with-gdb</id>
    <content type="html">&lt;p&gt;Suppose you have in your software objects with specific lifetime requirements, e.g. they must be created during initialization or they must not persist beyond one cycle. Moreover, a violation of these requirements may lead to a crash and you know &lt;em&gt;which&lt;/em&gt; object caused the problem but you do not know &lt;em&gt;where&lt;/em&gt; it came from.&lt;/p&gt;
 
 &lt;div class=&quot;language-cpp highlighter-rouge&quot;&gt;&lt;div class=&quot;highlight&quot;&gt;&lt;pre class=&quot;highlight&quot;&gt;&lt;code&gt;&lt;span class=&quot;n&quot;&gt;Object&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;*&lt;/span&gt; &lt;span class=&quot;nf&quot;&gt;factory&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;()&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;{&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;...&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;}&lt;/span&gt;

@@ -6,10 +6,10 @@
 "title": "Writing a checker for clang",
 "url": "/blog/2019/05/12/writing-a-checker-for-clang.html"},
 
-{"date": "Sun, 12 May 2019 00:00:00 +0200",
+{"date": "Mon, 07 Jan 2019 00:00:00 +0100",
 "categories": ["blog"],
 "tags": [],
 "title": "Finding leaks with gdb",
-"url": "/blog/2019/05/12/finding-leaks-with-gdb.html"},
+"url": "/blog/2019/01/07/finding-leaks-with-gdb.html"},
 
 false]
