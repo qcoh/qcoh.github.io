@@ -1,0 +1,309 @@
+<?xml version="1.0" encoding="utf-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom">
+ 
+ <title>The blog of Jeremias Yehdegho</title>
+ <link href="http://example.com/atom.xml" rel="self"/>
+ <link href="http://example.com"/>
+ <updated>2021-03-28T20:49:12+02:00</updated>
+ <id>http://example.com</id>
+ <author>
+   <name>Jeremias Yehdegho</name>
+   <email>j.yehdegho@gmail.com</email>
+ </author>
+
+ 
+ <entry>
+   <title>Writing a checker for clang</title>
+   <link href="http://example.com/blog/2019/05/12/writing-a-checker-for-clang.html"/>
+   <updated>2019-05-12T00:00:00+02:00</updated>
+   <id>http://example.com/blog/2019/05/12/writing-a-checker-for-clang</id>
+   <content type="html">&lt;p&gt;When writing safety-critical software, people often use languages like Ada, C or C++. The former has an excellent reputation concerning safety, the latter two absolutely do not. In order to make the use of C and C++ safer, people write in restricted subsets of these languages, avoiding dangerous language constructs and features.&lt;/p&gt;
+
+&lt;p&gt;One of such language subset is the &lt;a href=&quot;https://www.autosar.org/fileadmin/user_upload/standards/adaptive/17-03/AUTOSAR_RS_CPP14Guidelines.pdf&quot;&gt;Autosar coding guidelines for C++14&lt;/a&gt;, which are based on earlier coding standards, such as MISRA and the JSF coding standard.&lt;/p&gt;
+
+&lt;p&gt;In this post, I want to explain how to write a checker for the following Autosar rule using clang:&lt;/p&gt;
+
+&lt;div class=&quot;language-plaintext highlighter-rouge&quot;&gt;&lt;div class=&quot;highlight&quot;&gt;&lt;pre class=&quot;highlight&quot;&gt;&lt;code&gt;Rule A3-2-2 (required, implementation, automated)  
+Non-POD type objects with static storage duration shall not be used.
+&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;/div&gt;
+
+&lt;p&gt;You can find the code &lt;a href=&quot;https://github.com/qcoh/SimpleChecker&quot;&gt;here&lt;/a&gt;.&lt;/p&gt;
+
+&lt;h2 id=&quot;project-setup-on-ubuntu-1804-with-cmake&quot;&gt;Project Setup on Ubuntu 18.04 with CMake&lt;/h2&gt;
+
+&lt;p&gt;The recommended approach according to clang website is to build llvm and clang yourself. However compiling LLVM and clang takes a lot of time and space and I gave up on that on my underpowered laptop after several hours and tens of gigabytes.&lt;/p&gt;
+
+&lt;p&gt;Fortunately, you can use the development libraries on Ubuntu (and presumably other Linux distributions as well). For Ubuntu 18.04, you can install the dependencies via:&lt;/p&gt;
+
+&lt;div class=&quot;language-plaintext highlighter-rouge&quot;&gt;&lt;div class=&quot;highlight&quot;&gt;&lt;pre class=&quot;highlight&quot;&gt;&lt;code&gt;sudo apt install llvm-7idev libclang-7-dev clang-tools-7
+&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;/div&gt;
+
+&lt;p&gt;My project setup is&lt;/p&gt;
+
+&lt;div class=&quot;language-plaintext highlighter-rouge&quot;&gt;&lt;div class=&quot;highlight&quot;&gt;&lt;pre class=&quot;highlight&quot;&gt;&lt;code&gt;.
+├── CMakeLists.txt
+├── example
+│   └── example.cpp
+└── SimpleChecker.cpp
+&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;/div&gt;
+
+&lt;p&gt;with CMakeLists.txt as follows:&lt;/p&gt;
+
+&lt;div class=&quot;language-plaintext highlighter-rouge&quot;&gt;&lt;div class=&quot;highlight&quot;&gt;&lt;pre class=&quot;highlight&quot;&gt;&lt;code&gt;cmake_minimum_required(VERSION 3.10)
+project(simple_checker LANGUAGES CXX)
+
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED YES)
+set(CMAKE_CXX_EXTENSIONS NO)
+
+find_package(LLVM REQUIRED CONFIG)
+include_directories(${LLVM_INCLUDE_DIRS})
+
+add_library(simple_checker SHARED
+	SimpleChecker.cpp
+)
+
+target_link_libraries(simple_checker PRIVATE
+	LLVM
+)
+&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;/div&gt;
+
+&lt;h2 id=&quot;a-simple-checker--autosar-rule-a3-2-2&quot;&gt;A simple Checker – Autosar Rule A3-2-2&lt;/h2&gt;
+
+&lt;p&gt;clang’s checkers are visitors over e.g. variable declarations, enum statements, return statements, etc. These visitors are implemented by deriving from a template base class:&lt;/p&gt;
+
+&lt;div class=&quot;language-cpp highlighter-rouge&quot;&gt;&lt;div class=&quot;highlight&quot;&gt;&lt;pre class=&quot;highlight&quot;&gt;&lt;code&gt;&lt;span class=&quot;k&quot;&gt;class&lt;/span&gt; &lt;span class=&quot;nc&quot;&gt;SimpleChecker&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;:&lt;/span&gt; &lt;span class=&quot;k&quot;&gt;public&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;Checker&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;lt;&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;check&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;::&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;ASTDecl&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;lt;&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;VarDecl&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;gt;&amp;gt;&lt;/span&gt;
+&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;/div&gt;
+
+&lt;p&gt;The template parameters list the language constructs you want to visit. In our case, we only need to check the variable declarations, hence &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;ASTDecl&amp;lt;VarDecl&amp;gt;&lt;/code&gt;. As this indirection suggests, there are several other declarations, such as &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;FunctionDecl&lt;/code&gt; (for function declarations), &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;RecordDecl&lt;/code&gt; (for record declarations, i.e. class members) and so on.&lt;/p&gt;
+
+&lt;p&gt;The actual check is implement as a method:&lt;/p&gt;
+
+&lt;div class=&quot;language-cpp highlighter-rouge&quot;&gt;&lt;div class=&quot;highlight&quot;&gt;&lt;pre class=&quot;highlight&quot;&gt;&lt;code&gt;&lt;span class=&quot;kt&quot;&gt;void&lt;/span&gt; &lt;span class=&quot;nf&quot;&gt;checkASTDecl&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;k&quot;&gt;const&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;VarDecl&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;*&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;varDecl&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;AnalysisManager&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;&amp;amp;&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;analysisManager&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;BugReporter&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;&amp;amp;&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;bugReporter&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt; &lt;span class=&quot;k&quot;&gt;const&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;{&lt;/span&gt;
+	&lt;span class=&quot;k&quot;&gt;if&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;!&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;varDecl&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;{&lt;/span&gt;
+		&lt;span class=&quot;k&quot;&gt;return&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt;
+	&lt;span class=&quot;p&quot;&gt;}&lt;/span&gt;
+
+	&lt;span class=&quot;k&quot;&gt;const&lt;/span&gt; &lt;span class=&quot;kt&quot;&gt;bool&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;hasStaticStorageDuration&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; 
+		&lt;span class=&quot;n&quot;&gt;varDecl&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;-&amp;gt;&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;isStaticLocal&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;()&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;||&lt;/span&gt;
+		&lt;span class=&quot;n&quot;&gt;varDecl&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;-&amp;gt;&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;isStaticDataMember&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;()&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;||&lt;/span&gt;
+		&lt;span class=&quot;n&quot;&gt;varDecl&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;-&amp;gt;&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;hasGlobalStorage&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;();&lt;/span&gt;
+
+	&lt;span class=&quot;k&quot;&gt;const&lt;/span&gt; &lt;span class=&quot;kt&quot;&gt;bool&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;isPOD&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;varDecl&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;-&amp;gt;&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;getType&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;().&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;isPODType&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;varDecl&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;-&amp;gt;&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;getASTContext&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;());&lt;/span&gt;
+
+	&lt;span class=&quot;k&quot;&gt;if&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;hasStaticStorageDuration&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;&amp;amp;&amp;amp;&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;!&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;isPOD&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;{&lt;/span&gt;
+		&lt;span class=&quot;n&quot;&gt;PathDiagnosticLocation&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;pathDiagnosticLocation&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt;
+		    &lt;span class=&quot;n&quot;&gt;PathDiagnosticLocation&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;::&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;create&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;varDecl&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;bugReporter&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;getSourceManager&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;());&lt;/span&gt;
+
+		&lt;span class=&quot;n&quot;&gt;bugReporter&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;emitReport&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;
+		    &lt;span class=&quot;n&quot;&gt;std&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;::&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;make_unique&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;lt;&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;BugReport&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;gt;&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;
+			&lt;span class=&quot;o&quot;&gt;*&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;m_bugType&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt;
+			&lt;span class=&quot;n&quot;&gt;m_bugType&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;-&amp;gt;&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;getName&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(),&lt;/span&gt;
+			&lt;span class=&quot;n&quot;&gt;pathDiagnosticLocation&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;));&lt;/span&gt;
+	&lt;span class=&quot;p&quot;&gt;}&lt;/span&gt;
+&lt;span class=&quot;err&quot;&gt;}&lt;/span&gt;
+&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;/div&gt;
+
+&lt;p&gt;Static storage duration of a variable can mean one of three things:&lt;/p&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;It is a local variable, which we check using &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;isStaticLocal&lt;/code&gt;&lt;/li&gt;
+  &lt;li&gt;It is a static member variable of a class, which we check using &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;isStaticDataMember&lt;/code&gt;&lt;/li&gt;
+  &lt;li&gt;It is a global variable, either static or inside an anonymous namespace, which we check using &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;hasGlobalStorage&lt;/code&gt;&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;p&gt;To check whether the type of the variable is a plain old data type, we first obtain the underlying type of the declaration and then invoke the method &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;isPODType&lt;/code&gt;, which tells us just that.&lt;/p&gt;
+
+&lt;p&gt;If we find that a non-POD variable has static storage duration, we report an error. Notice how we pass information on the location of the issue, resulting in the nice error messages with line numbers and code snippets, for which clang is known for.&lt;/p&gt;
+
+&lt;p&gt;Lastly, we register the checker:&lt;/p&gt;
+
+&lt;div class=&quot;language-cpp highlighter-rouge&quot;&gt;&lt;div class=&quot;highlight&quot;&gt;&lt;pre class=&quot;highlight&quot;&gt;&lt;code&gt;&lt;span class=&quot;k&quot;&gt;extern&lt;/span&gt; &lt;span class=&quot;s&quot;&gt;&quot;C&quot;&lt;/span&gt; &lt;span class=&quot;kt&quot;&gt;void&lt;/span&gt; &lt;span class=&quot;nf&quot;&gt;clang_registerCheckers&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;CheckerRegistry&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;&amp;amp;&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;registry&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;{&lt;/span&gt;
+	&lt;span class=&quot;n&quot;&gt;registry&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;.&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;addChecker&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;lt;&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;SimpleChecker&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;gt;&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;
+		&lt;span class=&quot;s&quot;&gt;&quot;autosar.A3-3-2&quot;&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;,&lt;/span&gt;
+		&lt;span class=&quot;s&quot;&gt;&quot;Non-POD type objects with static storage duration shall not be used.&quot;&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;);&lt;/span&gt;
+&lt;span class=&quot;p&quot;&gt;}&lt;/span&gt;
+
+&lt;span class=&quot;k&quot;&gt;extern&lt;/span&gt; &lt;span class=&quot;s&quot;&gt;&quot;C&quot;&lt;/span&gt; &lt;span class=&quot;k&quot;&gt;const&lt;/span&gt; &lt;span class=&quot;kt&quot;&gt;char&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;clang_analyzerAPIVersionString&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;[]&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;CLANG_ANALYZER_API_VERSION_STRING&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt;
+&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;/div&gt;
+
+&lt;h2 id=&quot;building-and-using-the-checker&quot;&gt;Building and Using the Checker&lt;/h2&gt;
+
+&lt;p&gt;We can build the checker by creating a build directory, running CMake and make from there:&lt;/p&gt;
+
+&lt;div class=&quot;language-plaintext highlighter-rouge&quot;&gt;&lt;div class=&quot;highlight&quot;&gt;&lt;pre class=&quot;highlight&quot;&gt;&lt;code&gt;mkdir build &amp;amp;&amp;amp; cd build
+cmake .. &amp;amp;&amp;amp; make
+&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;/div&gt;
+
+&lt;p&gt;The result will be the shared library &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;libsimple_checker.so&lt;/code&gt;, which can be used from clang’s &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;scan-build-7&lt;/code&gt; script. Essentially this script sets the &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;CXX&lt;/code&gt; environment variable to an instrumented clang, which uses the configured checkers. The arguments to this script can be a direct invocation of a compiler or build system.&lt;/p&gt;
+
+&lt;p&gt;To make sure everything works, check whether the just written checker is among the available checkers:&lt;/p&gt;
+
+&lt;div class=&quot;language-plaintext highlighter-rouge&quot;&gt;&lt;div class=&quot;highlight&quot;&gt;&lt;pre class=&quot;highlight&quot;&gt;&lt;code&gt;scan-build-7 -load-plugin ./libsimple_checker.so --help
+&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;/div&gt;
+
+&lt;p&gt;Output:&lt;/p&gt;
+
+&lt;div class=&quot;language-plaintext highlighter-rouge&quot;&gt;&lt;div class=&quot;highlight&quot;&gt;&lt;pre class=&quot;highlight&quot;&gt;&lt;code&gt;[...]
+   autosar.A3-3-2                  Non-POD type objects with static storage duration shall not be used.
+[...]
+&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;/div&gt;
+
+&lt;p&gt;In order to see whether the checker works, I copied&lt;sup id=&quot;fnref:1&quot; role=&quot;doc-noteref&quot;&gt;&lt;a href=&quot;#fn:1&quot; class=&quot;footnote&quot;&gt;1&lt;/a&gt;&lt;/sup&gt; the example from the Autosar coding guidelines, which contains the following code:&lt;/p&gt;
+
+&lt;div class=&quot;language-cpp highlighter-rouge&quot;&gt;&lt;div class=&quot;highlight&quot;&gt;&lt;pre class=&quot;highlight&quot;&gt;&lt;code&gt;&lt;span class=&quot;k&quot;&gt;class&lt;/span&gt; &lt;span class=&quot;nc&quot;&gt;A&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;{&lt;/span&gt;
+&lt;span class=&quot;nl&quot;&gt;public:&lt;/span&gt;
+	&lt;span class=&quot;n&quot;&gt;A&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;()&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;k&quot;&gt;default&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt;
+	&lt;span class=&quot;n&quot;&gt;A&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;k&quot;&gt;const&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;A&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;&amp;amp;&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;{}&lt;/span&gt;
+	&lt;span class=&quot;k&quot;&gt;static&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;std&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;::&lt;/span&gt;&lt;span class=&quot;kt&quot;&gt;uint8_t&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;instanceId&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt;
+	&lt;span class=&quot;k&quot;&gt;static&lt;/span&gt; &lt;span class=&quot;kt&quot;&gt;float&lt;/span&gt; &lt;span class=&quot;k&quot;&gt;const&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;pi&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt;
+	&lt;span class=&quot;k&quot;&gt;static&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;std&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;::&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;string&lt;/span&gt; &lt;span class=&quot;k&quot;&gt;const&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;seperator&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt;
+&lt;span class=&quot;p&quot;&gt;};&lt;/span&gt;
+
+&lt;span class=&quot;k&quot;&gt;static_assert&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;!&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;std&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;::&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;is_pod&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;lt;&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;A&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;&amp;gt;::&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;value&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;);&lt;/span&gt;
+
+&lt;span class=&quot;n&quot;&gt;std&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;::&lt;/span&gt;&lt;span class=&quot;kt&quot;&gt;uint8_t&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;A&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;::&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;instanceId&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;mi&quot;&gt;0&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt;
+&lt;span class=&quot;kt&quot;&gt;float&lt;/span&gt; &lt;span class=&quot;k&quot;&gt;const&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;A&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;::&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;pi&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;mf&quot;&gt;3.14&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt;
+&lt;span class=&quot;n&quot;&gt;std&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;::&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;string&lt;/span&gt; &lt;span class=&quot;k&quot;&gt;const&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;A&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;::&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;seperator&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;s&quot;&gt;&quot;===&quot;&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt;
+&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;/div&gt;
+
+&lt;p&gt;Since &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;std::string&lt;/code&gt; is not a POD type, we expect a warning here, which we can indeed see if we enable and run the checker with:&lt;/p&gt;
+
+&lt;div class=&quot;language-plaintext highlighter-rouge&quot;&gt;&lt;div class=&quot;highlight&quot;&gt;&lt;pre class=&quot;highlight&quot;&gt;&lt;code&gt;scan-build-7 -load-plugin ./libsimple_checker.so -enable-checker autosar.A3-3-2 clang++-7 -std=c++17 ../example/example.cpp -c -o foo
+&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;/div&gt;
+
+&lt;p&gt;Output:&lt;/p&gt;
+
+&lt;div class=&quot;language-plaintext highlighter-rouge&quot;&gt;&lt;div class=&quot;highlight&quot;&gt;&lt;pre class=&quot;highlight&quot;&gt;&lt;code&gt;[...]
+../example/example.cpp:14:27: warning: Non-POD type objects with static storage duration shall not be used
+        static std::string const seperator;
+                                 ^~~~~~~~~
+../example/example.cpp:21:22: warning: Non-POD type objects with static storage duration shall not be used
+std::string const A::seperator = &quot;===&quot;;
+                     ^~~~~~~~~
+[...]
+&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;/div&gt;
+
+&lt;h2 id=&quot;summary&quot;&gt;Summary&lt;/h2&gt;
+
+&lt;p&gt;In this post, we implemented a simple checker using clang’s static analysis infrastructure. In the process, we saw some of the basic classes of clang and how they make the information needed for this checker (somewhat) easily available. Lastly, we used the checker on the example given by the coding guidelines and saw the warnings we expected.&lt;/p&gt;
+
+&lt;p&gt;You can find the full code &lt;a href=&quot;https://github.com/qcoh/SimpleChecker&quot;&gt;here&lt;/a&gt;.&lt;/p&gt;
+
+&lt;h2 id=&quot;further-material&quot;&gt;Further Material&lt;/h2&gt;
+
+&lt;p&gt;If you want to dig deeper, I found the following very helpful:&lt;/p&gt;
+
+&lt;ul&gt;
+  &lt;li&gt;&lt;a href=&quot;https://www.youtube.com/watch?v=kdxlsP5QVPw&quot;&gt;How to Write a Checker in 24 Hours&lt;/a&gt; (&lt;a href=&quot;https://llvm.org/devmtg/2012-11/Zaks-Rose-Checker24Hours.pdf&quot;&gt;Slides&lt;/a&gt;)&lt;/li&gt;
+  &lt;li&gt;&lt;a href=&quot;https://www.youtube.com/watch?v=VqCkCDFLSsc&quot;&gt;The Clang AST - a Tutorial&lt;/a&gt;&lt;/li&gt;
+  &lt;li&gt;&lt;a href=&quot;https://github.com/llvm/llvm-project/blob/master/clang/lib/StaticAnalyzer/Checkers/CheckerDocumentation.cpp&quot;&gt;CheckerDocumentation.cpp&lt;/a&gt;&lt;/li&gt;
+&lt;/ul&gt;
+
+&lt;div class=&quot;footnotes&quot; role=&quot;doc-endnotes&quot;&gt;
+  &lt;ol&gt;
+    &lt;li id=&quot;fn:1&quot; role=&quot;doc-endnote&quot;&gt;
+      &lt;p&gt;The example from the guidelines does not seem to be correct. I had to add a copy constructor to make it non-POD. &lt;a href=&quot;#fnref:1&quot; class=&quot;reversefootnote&quot; role=&quot;doc-backlink&quot;&gt;&amp;#8617;&lt;/a&gt;&lt;/p&gt;
+    &lt;/li&gt;
+  &lt;/ol&gt;
+&lt;/div&gt;
+</content>
+ </entry>
+ 
+ <entry>
+   <title>Finding leaks with gdb</title>
+   <link href="http://example.com/blog/2019/05/12/finding-leaks-with-gdb.html"/>
+   <updated>2019-05-12T00:00:00+02:00</updated>
+   <id>http://example.com/blog/2019/05/12/finding-leaks-with-gdb</id>
+   <content type="html">&lt;p&gt;Suppose you have in your software objects with specific lifetime requirements, e.g. they must be created during initialization or they must not persist beyond one cycle. Moreover, a violation of these requirements may lead to a crash and you know &lt;em&gt;which&lt;/em&gt; object caused the problem but you do not know &lt;em&gt;where&lt;/em&gt; it came from.&lt;/p&gt;
+
+&lt;div class=&quot;language-cpp highlighter-rouge&quot;&gt;&lt;div class=&quot;highlight&quot;&gt;&lt;pre class=&quot;highlight&quot;&gt;&lt;code&gt;&lt;span class=&quot;n&quot;&gt;Object&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;*&lt;/span&gt; &lt;span class=&quot;nf&quot;&gt;factory&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;()&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;{&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;...&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;}&lt;/span&gt;
+&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;/div&gt;
+
+&lt;p&gt;which was called in several dozen places throughout the code. I was tempted to store &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;__FILE__&lt;/code&gt; and &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;__LINE__&lt;/code&gt; with the object but modifying every call to &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;factory()&lt;/code&gt; was too tedious.&lt;/p&gt;
+
+&lt;p&gt;Fortunately, it is possible to find the file name and line number of each call to &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;factory()&lt;/code&gt; from inside the function body.&lt;/p&gt;
+
+&lt;h2 id=&quot;enter-__builtin_return_address&quot;&gt;Enter &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;__builtin_return_address&lt;/code&gt;&lt;/h2&gt;
+
+&lt;p&gt;As the name implies, this is a builtin function in gcc (and clang), which takes an unsigned int argument (the level, but we will ignore this) and returns a void pointer. Per gcc’s &lt;a href=&quot;https://gcc.gnu.org/onlinedocs/gcc/Return-Address.html&quot;&gt;documentation&lt;/a&gt;:&lt;/p&gt;
+
+&lt;blockquote&gt;
+  &lt;p&gt;This function returns the return address of the current function […]&lt;/p&gt;
+&lt;/blockquote&gt;
+
+&lt;p&gt;In order to better understand what it does, let’s look at the assembly output of this very simple program:&lt;/p&gt;
+
+&lt;div class=&quot;language-cpp highlighter-rouge&quot;&gt;&lt;div class=&quot;highlight&quot;&gt;&lt;pre class=&quot;highlight&quot;&gt;&lt;code&gt;&lt;span class=&quot;kt&quot;&gt;void&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;*&lt;/span&gt; &lt;span class=&quot;nf&quot;&gt;foo&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;()&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;{&lt;/span&gt;
+	&lt;span class=&quot;k&quot;&gt;return&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;__builtin_return_address&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;mi&quot;&gt;0&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;);&lt;/span&gt;
+&lt;span class=&quot;p&quot;&gt;}&lt;/span&gt;
+
+&lt;span class=&quot;kt&quot;&gt;int&lt;/span&gt; &lt;span class=&quot;nf&quot;&gt;main&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;()&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;{&lt;/span&gt;
+	&lt;span class=&quot;n&quot;&gt;foo&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;();&lt;/span&gt;
+&lt;span class=&quot;p&quot;&gt;}&lt;/span&gt;
+&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;/div&gt;
+
+&lt;p&gt;If we compile&lt;sup id=&quot;fnref:1&quot; role=&quot;doc-noteref&quot;&gt;&lt;a href=&quot;#fn:1&quot; class=&quot;footnote&quot;&gt;1&lt;/a&gt;&lt;/sup&gt; it and run it with gdb, we get&lt;/p&gt;
+
+&lt;div class=&quot;language-plaintext highlighter-rouge&quot;&gt;&lt;div class=&quot;highlight&quot;&gt;&lt;pre class=&quot;highlight&quot;&gt;&lt;code&gt;0x5555555545fa &amp;lt;foo()&amp;gt;                  push   rbp
+0x5555555545fb &amp;lt;foo()+1&amp;gt;                mov    rbp,rsp 
+0x5555555545fe &amp;lt;foo()+4&amp;gt;                mov    rax,QWORD PTR [rbp+0x8]
+0x555555554602 &amp;lt;foo()+8&amp;gt;                pop    rbp
+0x555555554603 &amp;lt;foo()+9&amp;gt;                ret
+0x555555554604 &amp;lt;main()&amp;gt;                 push   rbp
+0x555555554605 &amp;lt;main()+1&amp;gt;               mov    rbp,rsp
+0x555555554608 &amp;lt;main()+4&amp;gt;               call   0x5555555545fa &amp;lt;foo()&amp;gt;
+0x55555555460d &amp;lt;main()+9&amp;gt;               mov    eax,0x0
+0x555555554612 &amp;lt;main()+14&amp;gt;              pop    rbp
+0x555555554613 &amp;lt;main()+15&amp;gt;              ret 
+&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;/div&gt;
+
+&lt;p&gt;The interesting bit happens at &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;foo()+4&lt;/code&gt;, where the value of &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;[rbp+8]&lt;/code&gt; is moved into &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;rax&lt;/code&gt; &lt;sup id=&quot;fnref:2&quot; role=&quot;doc-noteref&quot;&gt;&lt;a href=&quot;#fn:2&quot; class=&quot;footnote&quot;&gt;2&lt;/a&gt;&lt;/sup&gt;. In gdb we can inspect this value and see&lt;/p&gt;
+
+&lt;div class=&quot;language-cpp highlighter-rouge&quot;&gt;&lt;div class=&quot;highlight&quot;&gt;&lt;pre class=&quot;highlight&quot;&gt;&lt;code&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;gdb&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;p&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;/&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;x&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;*&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;kt&quot;&gt;unsigned&lt;/span&gt; &lt;span class=&quot;kt&quot;&gt;long&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;*&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)(&lt;/span&gt;&lt;span class=&quot;err&quot;&gt;$&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;rbp&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;+&lt;/span&gt; &lt;span class=&quot;mi&quot;&gt;8&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;)&lt;/span&gt;
+&lt;span class=&quot;err&quot;&gt;$&lt;/span&gt;&lt;span class=&quot;mi&quot;&gt;1&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;mh&quot;&gt;0x55555555460d&lt;/span&gt;
+&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;/div&gt;
+
+&lt;p&gt;which is &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;main()+9&lt;/code&gt;, the code immediately after the call to &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;foo()&lt;/code&gt;. What we just did manually, gdb can do automatically:&lt;/p&gt;
+
+&lt;div class=&quot;language-plaintext highlighter-rouge&quot;&gt;&lt;div class=&quot;highlight&quot;&gt;&lt;pre class=&quot;highlight&quot;&gt;&lt;code&gt;(gdb) info line *0x55555555460d
+Line 7 of &quot;research.cpp&quot; starts at address 0x55555555460d &amp;lt;main()+9&amp;gt; and ends at 0x555555554614.
+&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;/div&gt;
+
+&lt;p&gt;Note that gdb tells us file name and line number.&lt;/p&gt;
+
+&lt;h2 id=&quot;finding-leaks&quot;&gt;Finding leaks&lt;/h2&gt;
+
+&lt;p&gt;Returning to our example before, I modified &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;Object&lt;/code&gt; and the factory&lt;/p&gt;
+
+&lt;div class=&quot;language-cpp highlighter-rouge&quot;&gt;&lt;div class=&quot;highlight&quot;&gt;&lt;pre class=&quot;highlight&quot;&gt;&lt;code&gt;&lt;span class=&quot;n&quot;&gt;Object&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;*&lt;/span&gt; &lt;span class=&quot;nf&quot;&gt;factory&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;()&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;{&lt;/span&gt;
+	&lt;span class=&quot;n&quot;&gt;Object&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;*&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;ret&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;p&quot;&gt;...&lt;/span&gt;
+	&lt;span class=&quot;n&quot;&gt;ret&lt;/span&gt;&lt;span class=&quot;o&quot;&gt;-&amp;gt;&lt;/span&gt;&lt;span class=&quot;n&quot;&gt;m_origin&lt;/span&gt; &lt;span class=&quot;o&quot;&gt;=&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;__builtin_return_address&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;(&lt;/span&gt;&lt;span class=&quot;mi&quot;&gt;0&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;);&lt;/span&gt;
+	&lt;span class=&quot;k&quot;&gt;return&lt;/span&gt; &lt;span class=&quot;n&quot;&gt;ret&lt;/span&gt;&lt;span class=&quot;p&quot;&gt;;&lt;/span&gt;
+&lt;span class=&quot;p&quot;&gt;}&lt;/span&gt;
+&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;/div&gt;
+
+&lt;p&gt;When the bug occured and I knew which object caused the issue, I was now able to figure out where it came from:&lt;/p&gt;
+
+&lt;div class=&quot;language-plaintext highlighter-rouge&quot;&gt;&lt;div class=&quot;highlight&quot;&gt;&lt;pre class=&quot;highlight&quot;&gt;&lt;code&gt;(gdb) info line *offendingObject-&amp;gt;m_origin
+&lt;/code&gt;&lt;/pre&gt;&lt;/div&gt;&lt;/div&gt;
+
+&lt;p&gt;This technique often allowed me to find the needle in the haystack, for example where an exception was thrown, with little time investment.&lt;/p&gt;
+
+&lt;p&gt;Thanks for reading! If you have a question or a comment, feel free to contact me.&lt;/p&gt;
+
+&lt;div class=&quot;footnotes&quot; role=&quot;doc-endnotes&quot;&gt;
+  &lt;ol&gt;
+    &lt;li id=&quot;fn:1&quot; role=&quot;doc-endnote&quot;&gt;
+      &lt;p&gt;&lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;g++ -g research.cpp&lt;/code&gt; &lt;a href=&quot;#fnref:1&quot; class=&quot;reversefootnote&quot; role=&quot;doc-backlink&quot;&gt;&amp;#8617;&lt;/a&gt;&lt;/p&gt;
+    &lt;/li&gt;
+    &lt;li id=&quot;fn:2&quot; role=&quot;doc-endnote&quot;&gt;
+      &lt;p&gt;Note that if we compile with &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;-fomit-frame-pointer&lt;/code&gt; the return value of &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;__builtin_return_address&lt;/code&gt; still points to the correct location in the code but without doing the indirection via &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;rbp&lt;/code&gt; and just returning &lt;code class=&quot;language-plaintext highlighter-rouge&quot;&gt;[rsp]&lt;/code&gt;. &lt;a href=&quot;#fnref:2&quot; class=&quot;reversefootnote&quot; role=&quot;doc-backlink&quot;&gt;&amp;#8617;&lt;/a&gt;&lt;/p&gt;
+    &lt;/li&gt;
+  &lt;/ol&gt;
+&lt;/div&gt;
+</content>
+ </entry>
+ 
+ 
+</feed>

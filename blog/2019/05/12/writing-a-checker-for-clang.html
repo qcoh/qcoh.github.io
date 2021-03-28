@@ -1,0 +1,314 @@
+<!DOCTYPE html>
+<!--[if lt IE 7 ]><html class="ie ie6" lang="en"> <![endif]-->
+<!--[if IE 7 ]><html class="ie ie7" lang="en"> <![endif]-->
+<!--[if IE 8 ]><html class="ie ie8" lang="en"> <![endif]-->
+<!--[if (gte IE 9)|!(IE)]><!--><html lang="en"> <!--<![endif]-->
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Jeremias Yehdegho - Writing a checker for clang</title>
+  <meta name="author" content="Jeremias Yehdegho" />
+  <meta name="description" content="The blog of Jeremias Yehdegho" />
+  <link rel="canonical" href="http://example.com/blog/2019/05/12/writing-a-checker-for-clang.html" />
+
+  <link href="//fonts.googleapis.com/css?family=Open+Sans:600,800" rel="stylesheet" type="text/css">
+  <link rel="shortcut icon" href="/favicon.png">
+  <link rel="alternate" type="application/atom+xml" title="Jeremias Yehdegho" href="http://example.com/atom.xml" />
+
+  <link rel="stylesheet" href="/assets/css/all.css">
+  <link href="https://maxcdn.bootstrapcdn.com/font-awesome/4.7.0/css/font-awesome.min.css" rel="stylesheet" integrity="sha384-wvfXpqpZZVQGK6TAh5PVlGOfQNHSoD2xbE+QkPxCAFlNEevoEH3Sl0sibVcOQVnN" crossorigin="anonymous">
+</head>
+<body>
+  <div class="container">
+    <div class="four columns sidebar">
+      <nav>
+  <h1>Hi.</h1>
+  <a href="/">
+    
+    <img src="/bike.jpg" id="logo" alt="Blog logo"/>
+    
+  </a>
+  <h2>I'm <a href="/">Jeremias Yehdegho</a>.</h2>
+  <div id="bio">
+    <p>I'm a software engineer in Graz, Austria.</p>
+  </div>
+  <div id="social">
+    Follow me:
+<div id="stalker">
+  
+  <a title="qcoh on Github" href="https://github.com/qcoh">
+    <i class="fa fa-github-square"></i>
+  </a>
+  
+
+  
+
+  
+
+  
+
+  
+
+  
+  <a title="quasicoherent on Twitter" href="https://twitter.com/quasicoherent">
+    <i class="fa fa-twitter-square"></i>
+  </a>
+  
+
+  
+
+  
+
+  
+  <a title="Jeremias Yehdegho on LinkedIn" href="https://www.linkedin.com/in/jeremias-yehdegho">
+    <i class="fa fa-linkedin-square"></i>
+  </a>
+  
+
+  
+
+  
+
+  
+  <a title="Atom feed" id="atom" href="/atom.xml">
+    <i class="fa fa-rss-square"></i>
+  </a>
+  
+</div>
+
+  </div>
+</nav>
+
+    </div>
+
+    <div class="eleven columns content">
+      <p class="meta">
+  May 12, 2019 
+  <a href="/">
+    <i class="home fa fa-home"></i>
+  </a>
+</p>
+
+<h1 class="title">Writing a checker for clang</h1>
+
+<div id="post">
+  <p>When writing safety-critical software, people often use languages like Ada, C or C++. The former has an excellent reputation concerning safety, the latter two absolutely do not. In order to make the use of C and C++ safer, people write in restricted subsets of these languages, avoiding dangerous language constructs and features.</p>
+
+<p>One of such language subset is the <a href="https://www.autosar.org/fileadmin/user_upload/standards/adaptive/17-03/AUTOSAR_RS_CPP14Guidelines.pdf">Autosar coding guidelines for C++14</a>, which are based on earlier coding standards, such as MISRA and the JSF coding standard.</p>
+
+<p>In this post, I want to explain how to write a checker for the following Autosar rule using clang:</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>Rule A3-2-2 (required, implementation, automated)  
+Non-POD type objects with static storage duration shall not be used.
+</code></pre></div></div>
+
+<p>You can find the code <a href="https://github.com/qcoh/SimpleChecker">here</a>.</p>
+
+<h2 id="project-setup-on-ubuntu-1804-with-cmake">Project Setup on Ubuntu 18.04 with CMake</h2>
+
+<p>The recommended approach according to clang website is to build llvm and clang yourself. However compiling LLVM and clang takes a lot of time and space and I gave up on that on my underpowered laptop after several hours and tens of gigabytes.</p>
+
+<p>Fortunately, you can use the development libraries on Ubuntu (and presumably other Linux distributions as well). For Ubuntu 18.04, you can install the dependencies via:</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>sudo apt install llvm-7idev libclang-7-dev clang-tools-7
+</code></pre></div></div>
+
+<p>My project setup is</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>.
+├── CMakeLists.txt
+├── example
+│   └── example.cpp
+└── SimpleChecker.cpp
+</code></pre></div></div>
+
+<p>with CMakeLists.txt as follows:</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>cmake_minimum_required(VERSION 3.10)
+project(simple_checker LANGUAGES CXX)
+
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED YES)
+set(CMAKE_CXX_EXTENSIONS NO)
+
+find_package(LLVM REQUIRED CONFIG)
+include_directories(${LLVM_INCLUDE_DIRS})
+
+add_library(simple_checker SHARED
+	SimpleChecker.cpp
+)
+
+target_link_libraries(simple_checker PRIVATE
+	LLVM
+)
+</code></pre></div></div>
+
+<h2 id="a-simple-checker--autosar-rule-a3-2-2">A simple Checker – Autosar Rule A3-2-2</h2>
+
+<p>clang’s checkers are visitors over e.g. variable declarations, enum statements, return statements, etc. These visitors are implemented by deriving from a template base class:</p>
+
+<div class="language-cpp highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="k">class</span> <span class="nc">SimpleChecker</span> <span class="o">:</span> <span class="k">public</span> <span class="n">Checker</span><span class="o">&lt;</span><span class="n">check</span><span class="o">::</span><span class="n">ASTDecl</span><span class="o">&lt;</span><span class="n">VarDecl</span><span class="o">&gt;&gt;</span>
+</code></pre></div></div>
+
+<p>The template parameters list the language constructs you want to visit. In our case, we only need to check the variable declarations, hence <code class="language-plaintext highlighter-rouge">ASTDecl&lt;VarDecl&gt;</code>. As this indirection suggests, there are several other declarations, such as <code class="language-plaintext highlighter-rouge">FunctionDecl</code> (for function declarations), <code class="language-plaintext highlighter-rouge">RecordDecl</code> (for record declarations, i.e. class members) and so on.</p>
+
+<p>The actual check is implement as a method:</p>
+
+<div class="language-cpp highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="kt">void</span> <span class="nf">checkASTDecl</span><span class="p">(</span><span class="k">const</span> <span class="n">VarDecl</span> <span class="o">*</span><span class="n">varDecl</span><span class="p">,</span> <span class="n">AnalysisManager</span> <span class="o">&amp;</span><span class="n">analysisManager</span><span class="p">,</span> <span class="n">BugReporter</span> <span class="o">&amp;</span><span class="n">bugReporter</span><span class="p">)</span> <span class="k">const</span> <span class="p">{</span>
+	<span class="k">if</span> <span class="p">(</span><span class="o">!</span><span class="n">varDecl</span><span class="p">)</span> <span class="p">{</span>
+		<span class="k">return</span><span class="p">;</span>
+	<span class="p">}</span>
+
+	<span class="k">const</span> <span class="kt">bool</span> <span class="n">hasStaticStorageDuration</span> <span class="o">=</span> 
+		<span class="n">varDecl</span><span class="o">-&gt;</span><span class="n">isStaticLocal</span><span class="p">()</span> <span class="o">||</span>
+		<span class="n">varDecl</span><span class="o">-&gt;</span><span class="n">isStaticDataMember</span><span class="p">()</span> <span class="o">||</span>
+		<span class="n">varDecl</span><span class="o">-&gt;</span><span class="n">hasGlobalStorage</span><span class="p">();</span>
+
+	<span class="k">const</span> <span class="kt">bool</span> <span class="n">isPOD</span> <span class="o">=</span> <span class="n">varDecl</span><span class="o">-&gt;</span><span class="n">getType</span><span class="p">().</span><span class="n">isPODType</span><span class="p">(</span><span class="n">varDecl</span><span class="o">-&gt;</span><span class="n">getASTContext</span><span class="p">());</span>
+
+	<span class="k">if</span> <span class="p">(</span><span class="n">hasStaticStorageDuration</span> <span class="o">&amp;&amp;</span> <span class="o">!</span><span class="n">isPOD</span><span class="p">)</span> <span class="p">{</span>
+		<span class="n">PathDiagnosticLocation</span> <span class="n">pathDiagnosticLocation</span> <span class="o">=</span>
+		    <span class="n">PathDiagnosticLocation</span><span class="o">::</span><span class="n">create</span><span class="p">(</span><span class="n">varDecl</span><span class="p">,</span> <span class="n">bugReporter</span><span class="p">.</span><span class="n">getSourceManager</span><span class="p">());</span>
+
+		<span class="n">bugReporter</span><span class="p">.</span><span class="n">emitReport</span><span class="p">(</span>
+		    <span class="n">std</span><span class="o">::</span><span class="n">make_unique</span><span class="o">&lt;</span><span class="n">BugReport</span><span class="o">&gt;</span><span class="p">(</span>
+			<span class="o">*</span><span class="n">m_bugType</span><span class="p">,</span>
+			<span class="n">m_bugType</span><span class="o">-&gt;</span><span class="n">getName</span><span class="p">(),</span>
+			<span class="n">pathDiagnosticLocation</span><span class="p">));</span>
+	<span class="p">}</span>
+<span class="err">}</span>
+</code></pre></div></div>
+
+<p>Static storage duration of a variable can mean one of three things:</p>
+
+<ul>
+  <li>It is a local variable, which we check using <code class="language-plaintext highlighter-rouge">isStaticLocal</code></li>
+  <li>It is a static member variable of a class, which we check using <code class="language-plaintext highlighter-rouge">isStaticDataMember</code></li>
+  <li>It is a global variable, either static or inside an anonymous namespace, which we check using <code class="language-plaintext highlighter-rouge">hasGlobalStorage</code></li>
+</ul>
+
+<p>To check whether the type of the variable is a plain old data type, we first obtain the underlying type of the declaration and then invoke the method <code class="language-plaintext highlighter-rouge">isPODType</code>, which tells us just that.</p>
+
+<p>If we find that a non-POD variable has static storage duration, we report an error. Notice how we pass information on the location of the issue, resulting in the nice error messages with line numbers and code snippets, for which clang is known for.</p>
+
+<p>Lastly, we register the checker:</p>
+
+<div class="language-cpp highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="k">extern</span> <span class="s">"C"</span> <span class="kt">void</span> <span class="nf">clang_registerCheckers</span><span class="p">(</span><span class="n">CheckerRegistry</span> <span class="o">&amp;</span><span class="n">registry</span><span class="p">)</span> <span class="p">{</span>
+	<span class="n">registry</span><span class="p">.</span><span class="n">addChecker</span><span class="o">&lt;</span><span class="n">SimpleChecker</span><span class="o">&gt;</span><span class="p">(</span>
+		<span class="s">"autosar.A3-3-2"</span><span class="p">,</span>
+		<span class="s">"Non-POD type objects with static storage duration shall not be used."</span><span class="p">);</span>
+<span class="p">}</span>
+
+<span class="k">extern</span> <span class="s">"C"</span> <span class="k">const</span> <span class="kt">char</span> <span class="n">clang_analyzerAPIVersionString</span><span class="p">[]</span> <span class="o">=</span> <span class="n">CLANG_ANALYZER_API_VERSION_STRING</span><span class="p">;</span>
+</code></pre></div></div>
+
+<h2 id="building-and-using-the-checker">Building and Using the Checker</h2>
+
+<p>We can build the checker by creating a build directory, running CMake and make from there:</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>mkdir build &amp;&amp; cd build
+cmake .. &amp;&amp; make
+</code></pre></div></div>
+
+<p>The result will be the shared library <code class="language-plaintext highlighter-rouge">libsimple_checker.so</code>, which can be used from clang’s <code class="language-plaintext highlighter-rouge">scan-build-7</code> script. Essentially this script sets the <code class="language-plaintext highlighter-rouge">CXX</code> environment variable to an instrumented clang, which uses the configured checkers. The arguments to this script can be a direct invocation of a compiler or build system.</p>
+
+<p>To make sure everything works, check whether the just written checker is among the available checkers:</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>scan-build-7 -load-plugin ./libsimple_checker.so --help
+</code></pre></div></div>
+
+<p>Output:</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>[...]
+   autosar.A3-3-2                  Non-POD type objects with static storage duration shall not be used.
+[...]
+</code></pre></div></div>
+
+<p>In order to see whether the checker works, I copied<sup id="fnref:1" role="doc-noteref"><a href="#fn:1" class="footnote">1</a></sup> the example from the Autosar coding guidelines, which contains the following code:</p>
+
+<div class="language-cpp highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="k">class</span> <span class="nc">A</span> <span class="p">{</span>
+<span class="nl">public:</span>
+	<span class="n">A</span><span class="p">()</span> <span class="o">=</span> <span class="k">default</span><span class="p">;</span>
+	<span class="n">A</span><span class="p">(</span><span class="k">const</span> <span class="n">A</span> <span class="o">&amp;</span><span class="p">)</span> <span class="p">{}</span>
+	<span class="k">static</span> <span class="n">std</span><span class="o">::</span><span class="kt">uint8_t</span> <span class="n">instanceId</span><span class="p">;</span>
+	<span class="k">static</span> <span class="kt">float</span> <span class="k">const</span> <span class="n">pi</span><span class="p">;</span>
+	<span class="k">static</span> <span class="n">std</span><span class="o">::</span><span class="n">string</span> <span class="k">const</span> <span class="n">seperator</span><span class="p">;</span>
+<span class="p">};</span>
+
+<span class="k">static_assert</span><span class="p">(</span><span class="o">!</span><span class="n">std</span><span class="o">::</span><span class="n">is_pod</span><span class="o">&lt;</span><span class="n">A</span><span class="o">&gt;::</span><span class="n">value</span><span class="p">);</span>
+
+<span class="n">std</span><span class="o">::</span><span class="kt">uint8_t</span> <span class="n">A</span><span class="o">::</span><span class="n">instanceId</span> <span class="o">=</span> <span class="mi">0</span><span class="p">;</span>
+<span class="kt">float</span> <span class="k">const</span> <span class="n">A</span><span class="o">::</span><span class="n">pi</span> <span class="o">=</span> <span class="mf">3.14</span><span class="p">;</span>
+<span class="n">std</span><span class="o">::</span><span class="n">string</span> <span class="k">const</span> <span class="n">A</span><span class="o">::</span><span class="n">seperator</span> <span class="o">=</span> <span class="s">"==="</span><span class="p">;</span>
+</code></pre></div></div>
+
+<p>Since <code class="language-plaintext highlighter-rouge">std::string</code> is not a POD type, we expect a warning here, which we can indeed see if we enable and run the checker with:</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>scan-build-7 -load-plugin ./libsimple_checker.so -enable-checker autosar.A3-3-2 clang++-7 -std=c++17 ../example/example.cpp -c -o foo
+</code></pre></div></div>
+
+<p>Output:</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>[...]
+../example/example.cpp:14:27: warning: Non-POD type objects with static storage duration shall not be used
+        static std::string const seperator;
+                                 ^~~~~~~~~
+../example/example.cpp:21:22: warning: Non-POD type objects with static storage duration shall not be used
+std::string const A::seperator = "===";
+                     ^~~~~~~~~
+[...]
+</code></pre></div></div>
+
+<h2 id="summary">Summary</h2>
+
+<p>In this post, we implemented a simple checker using clang’s static analysis infrastructure. In the process, we saw some of the basic classes of clang and how they make the information needed for this checker (somewhat) easily available. Lastly, we used the checker on the example given by the coding guidelines and saw the warnings we expected.</p>
+
+<p>You can find the full code <a href="https://github.com/qcoh/SimpleChecker">here</a>.</p>
+
+<h2 id="further-material">Further Material</h2>
+
+<p>If you want to dig deeper, I found the following very helpful:</p>
+
+<ul>
+  <li><a href="https://www.youtube.com/watch?v=kdxlsP5QVPw">How to Write a Checker in 24 Hours</a> (<a href="https://llvm.org/devmtg/2012-11/Zaks-Rose-Checker24Hours.pdf">Slides</a>)</li>
+  <li><a href="https://www.youtube.com/watch?v=VqCkCDFLSsc">The Clang AST - a Tutorial</a></li>
+  <li><a href="https://github.com/llvm/llvm-project/blob/master/clang/lib/StaticAnalyzer/Checkers/CheckerDocumentation.cpp">CheckerDocumentation.cpp</a></li>
+</ul>
+
+<div class="footnotes" role="doc-endnotes">
+  <ol>
+    <li id="fn:1" role="doc-endnote">
+      <p>The example from the guidelines does not seem to be correct. I had to add a copy constructor to make it non-POD. <a href="#fnref:1" class="reversefootnote" role="doc-backlink">&#8617;</a></p>
+    </li>
+  </ol>
+</div>
+
+</div>
+
+<div id="related">
+  <h3>Related Posts</h3>
+  <ul class="posts">
+    
+    <li>
+      <span>12 May 2019 &raquo;</span> <a href="/blog/2019/05/12/finding-leaks-with-gdb.html">Finding leaks with gdb</a>
+    </li>
+    
+  </ul>
+</div>
+
+
+      <div class="footer">
+        <div class="disclaimer">
+  
+
+  <p>
+    © Jeremias Yehdegho, 2021 &mdash; built with <a href="http://jekyllrb.com/">Jekyll</a> using <a href="https://github.com/swanson/lagom">Lagom theme</a>
+  </p>
+</div>
+      </div>
+    </div>
+  </div>
+
+
+</body>
+</html>
