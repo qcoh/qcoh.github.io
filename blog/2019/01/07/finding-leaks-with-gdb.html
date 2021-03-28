@@ -1,0 +1,211 @@
+<!DOCTYPE html>
+<!--[if lt IE 7 ]><html class="ie ie6" lang="en"> <![endif]-->
+<!--[if IE 7 ]><html class="ie ie7" lang="en"> <![endif]-->
+<!--[if IE 8 ]><html class="ie ie8" lang="en"> <![endif]-->
+<!--[if (gte IE 9)|!(IE)]><!--><html lang="en"> <!--<![endif]-->
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Jeremias Yehdegho - Finding leaks with gdb</title>
+  <meta name="author" content="Jeremias Yehdegho" />
+  <meta name="description" content="The blog of Jeremias Yehdegho" />
+  <link rel="canonical" href="https://qcoh.github.io/blog/2019/01/07/finding-leaks-with-gdb.html" />
+
+  <link href="//fonts.googleapis.com/css?family=Open+Sans:600,800" rel="stylesheet" type="text/css">
+  <link rel="shortcut icon" href="/favicon.png">
+  <link rel="alternate" type="application/atom+xml" title="Jeremias Yehdegho" href="https://qcoh.github.io/atom.xml" />
+
+  <link rel="stylesheet" href="/assets/css/all.css">
+  <link href="https://maxcdn.bootstrapcdn.com/font-awesome/4.7.0/css/font-awesome.min.css" rel="stylesheet" integrity="sha384-wvfXpqpZZVQGK6TAh5PVlGOfQNHSoD2xbE+QkPxCAFlNEevoEH3Sl0sibVcOQVnN" crossorigin="anonymous">
+</head>
+<body>
+  <div class="container">
+    <div class="four columns sidebar">
+      <nav>
+  <h1>Hi.</h1>
+  <a href="/">
+    
+    <img src="/bike.jpg" id="logo" alt="Blog logo"/>
+    
+  </a>
+  <h2>I'm <a href="/">Jeremias Yehdegho</a>.</h2>
+  <div id="bio">
+    <p>Musings on software engineering.</p>
+  </div>
+  <div id="social">
+    <div id="stalker">
+  
+  <a title="qcoh on Github" href="https://github.com/qcoh">
+    <i class="fa fa-github-square"></i>
+  </a>
+  
+
+  
+
+  
+
+  
+
+  
+
+  
+  <a title="quasicoherent on Twitter" href="https://twitter.com/quasicoherent">
+    <i class="fa fa-twitter-square"></i>
+  </a>
+  
+
+  
+
+  
+
+  
+  <a title="Jeremias Yehdegho on LinkedIn" href="https://www.linkedin.com/in/jeremias-yehdegho">
+    <i class="fa fa-linkedin-square"></i>
+  </a>
+  
+
+  
+
+  
+
+  
+  <a title="Atom feed" id="atom" href="/atom.xml">
+    <i class="fa fa-rss-square"></i>
+  </a>
+  
+</div>
+
+  </div>
+</nav>
+
+    </div>
+
+    <div class="eleven columns content">
+      <p class="meta">
+  January 07, 2019 
+  <a href="/">
+    <i class="home fa fa-home"></i>
+  </a>
+</p>
+
+<h1 class="title">Finding leaks with gdb</h1>
+
+<div id="post">
+  <p>Suppose you have in your software objects with specific lifetime requirements, e.g. they must be created during initialization or they must not persist beyond one cycle. Moreover, a violation of these requirements may lead to a crash and you know <em>which</em> object caused the problem but you do not know <em>where</em> it came from.</p>
+
+<div class="language-cpp highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="n">Object</span><span class="o">*</span> <span class="nf">factory</span><span class="p">()</span> <span class="p">{</span> <span class="p">...</span> <span class="p">}</span>
+</code></pre></div></div>
+
+<p>which was called in several dozen places throughout the code. I was tempted to store <code class="language-plaintext highlighter-rouge">__FILE__</code> and <code class="language-plaintext highlighter-rouge">__LINE__</code> with the object but modifying every call to <code class="language-plaintext highlighter-rouge">factory()</code> was too tedious.</p>
+
+<p>Fortunately, it is possible to find the file name and line number of each call to <code class="language-plaintext highlighter-rouge">factory()</code> from inside the function body.</p>
+
+<h2 id="enter-__builtin_return_address">Enter <code class="language-plaintext highlighter-rouge">__builtin_return_address</code></h2>
+
+<p>As the name implies, this is a builtin function in gcc (and clang), which takes an unsigned int argument (the level, but we will ignore this) and returns a void pointer. Per gcc’s <a href="https://gcc.gnu.org/onlinedocs/gcc/Return-Address.html">documentation</a>:</p>
+
+<blockquote>
+  <p>This function returns the return address of the current function […]</p>
+</blockquote>
+
+<p>In order to better understand what it does, let’s look at the assembly output of this very simple program:</p>
+
+<div class="language-cpp highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="kt">void</span><span class="o">*</span> <span class="nf">foo</span><span class="p">()</span> <span class="p">{</span>
+	<span class="k">return</span> <span class="n">__builtin_return_address</span><span class="p">(</span><span class="mi">0</span><span class="p">);</span>
+<span class="p">}</span>
+
+<span class="kt">int</span> <span class="nf">main</span><span class="p">()</span> <span class="p">{</span>
+	<span class="n">foo</span><span class="p">();</span>
+<span class="p">}</span>
+</code></pre></div></div>
+
+<p>If we compile<sup id="fnref:1" role="doc-noteref"><a href="#fn:1" class="footnote">1</a></sup> it and run it with gdb, we get</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>0x5555555545fa &lt;foo()&gt;                  push   rbp
+0x5555555545fb &lt;foo()+1&gt;                mov    rbp,rsp 
+0x5555555545fe &lt;foo()+4&gt;                mov    rax,QWORD PTR [rbp+0x8]
+0x555555554602 &lt;foo()+8&gt;                pop    rbp
+0x555555554603 &lt;foo()+9&gt;                ret
+0x555555554604 &lt;main()&gt;                 push   rbp
+0x555555554605 &lt;main()+1&gt;               mov    rbp,rsp
+0x555555554608 &lt;main()+4&gt;               call   0x5555555545fa &lt;foo()&gt;
+0x55555555460d &lt;main()+9&gt;               mov    eax,0x0
+0x555555554612 &lt;main()+14&gt;              pop    rbp
+0x555555554613 &lt;main()+15&gt;              ret 
+</code></pre></div></div>
+
+<p>The interesting bit happens at <code class="language-plaintext highlighter-rouge">foo()+4</code>, where the value of <code class="language-plaintext highlighter-rouge">[rbp+8]</code> is moved into <code class="language-plaintext highlighter-rouge">rax</code> <sup id="fnref:2" role="doc-noteref"><a href="#fn:2" class="footnote">2</a></sup>. In gdb we can inspect this value and see</p>
+
+<div class="language-cpp highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="p">(</span><span class="n">gdb</span><span class="p">)</span> <span class="n">p</span><span class="o">/</span><span class="n">x</span> <span class="o">*</span><span class="p">(</span><span class="kt">unsigned</span> <span class="kt">long</span><span class="o">*</span><span class="p">)(</span><span class="err">$</span><span class="n">rbp</span> <span class="o">+</span> <span class="mi">8</span><span class="p">)</span>
+<span class="err">$</span><span class="mi">1</span> <span class="o">=</span> <span class="mh">0x55555555460d</span>
+</code></pre></div></div>
+
+<p>which is <code class="language-plaintext highlighter-rouge">main()+9</code>, the code immediately after the call to <code class="language-plaintext highlighter-rouge">foo()</code>. What we just did manually, gdb can do automatically:</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>(gdb) info line *0x55555555460d
+Line 7 of "research.cpp" starts at address 0x55555555460d &lt;main()+9&gt; and ends at 0x555555554614.
+</code></pre></div></div>
+
+<p>Note that gdb tells us file name and line number.</p>
+
+<h2 id="finding-leaks">Finding leaks</h2>
+
+<p>Returning to our example before, I modified <code class="language-plaintext highlighter-rouge">Object</code> and the factory</p>
+
+<div class="language-cpp highlighter-rouge"><div class="highlight"><pre class="highlight"><code><span class="n">Object</span><span class="o">*</span> <span class="nf">factory</span><span class="p">()</span> <span class="p">{</span>
+	<span class="n">Object</span><span class="o">*</span> <span class="n">ret</span> <span class="o">=</span> <span class="p">...</span>
+	<span class="n">ret</span><span class="o">-&gt;</span><span class="n">m_origin</span> <span class="o">=</span> <span class="n">__builtin_return_address</span><span class="p">(</span><span class="mi">0</span><span class="p">);</span>
+	<span class="k">return</span> <span class="n">ret</span><span class="p">;</span>
+<span class="p">}</span>
+</code></pre></div></div>
+
+<p>When the bug occured and I knew which object caused the issue, I was now able to figure out where it came from:</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>(gdb) info line *offendingObject-&gt;m_origin
+</code></pre></div></div>
+
+<p>This technique often allowed me to find the needle in the haystack, for example where an exception was thrown, with little time investment.</p>
+
+<p>Thanks for reading! If you have a question or a comment, feel free to contact me.</p>
+
+<div class="footnotes" role="doc-endnotes">
+  <ol>
+    <li id="fn:1" role="doc-endnote">
+      <p><code class="language-plaintext highlighter-rouge">g++ -g research.cpp</code> <a href="#fnref:1" class="reversefootnote" role="doc-backlink">&#8617;</a></p>
+    </li>
+    <li id="fn:2" role="doc-endnote">
+      <p>Note that if we compile with <code class="language-plaintext highlighter-rouge">-fomit-frame-pointer</code> the return value of <code class="language-plaintext highlighter-rouge">__builtin_return_address</code> still points to the correct location in the code but without doing the indirection via <code class="language-plaintext highlighter-rouge">rbp</code> and just returning <code class="language-plaintext highlighter-rouge">[rsp]</code>. <a href="#fnref:2" class="reversefootnote" role="doc-backlink">&#8617;</a></p>
+    </li>
+  </ol>
+</div>
+
+</div>
+
+<div id="related">
+  <h3>Related Posts</h3>
+  <ul class="posts">
+    
+    <li>
+      <span>12 May 2019 &raquo;</span> <a href="/blog/2019/05/12/writing-a-checker-for-clang.html">Writing a checker for clang</a>
+    </li>
+    
+  </ul>
+</div>
+
+
+      <div class="footer">
+        <div class="disclaimer">
+  
+
+  <p>
+  © Jeremias Yehdegho, 2021 &mdash; <a href="/about">Imprint</a>
+  </p>
+</div>
+
+      </div>
+    </div>
+  </div>
+
+
+</body>
+</html>
